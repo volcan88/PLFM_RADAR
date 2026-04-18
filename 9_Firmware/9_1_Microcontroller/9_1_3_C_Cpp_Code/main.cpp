@@ -39,6 +39,7 @@ extern "C" {
 #include <errno.h>
 #include <math.h>
 #include <stdio.h>
+#include <stdarg.h>
 #include <string.h>
 #include <inttypes.h>
 #include <iostream>
@@ -283,7 +284,7 @@ void systemPowerUpSequence();
 void systemPowerDownSequence();
 void initializeBeamMatrices();
 void runRadarPulseSequence();
-void executeChirpSequence(int num_chirps, uint32_t T1, uint32_t PRI1, uint32_t T2, uint32_t PRI2);
+void executeChirpSequence(int num_chirps, uint32_t T1_us, uint32_t PRI1_us, uint32_t T2_ns, uint32_t PRI2_ns);
 void printSystemStatus();
 
 //////////////////////////////////////////////
@@ -474,18 +475,35 @@ void initializeBeamMatrices() {
     HAL_UART_Transmit(&huart3, done, sizeof(done)-1, 1000);
 }
 
-void executeChirpSequence(int num_chirps, float T1, float PRI1, float T2, float PRI2) {
+// Timing arguments are integer (uint32_t) rather than float. The
+// internal delay_us / delay_ns helpers already take uint32_t, so the
+// previous float signature only forced hidden (uint32_t)cast truncation
+// and exposed the body to float-compare / subtraction surprises.
+// Convention:
+//   T1_us, PRI1_us  - long-chirp timing in microseconds (delay_us)
+//   T2_ns, PRI2_ns  - short-chirp timing in nanoseconds (delay_ns);
+//                     short chirp needs sub-us resolution (T2 defaults
+//                     to 500 ns, which rounds to zero in us).
+void executeChirpSequence(int num_chirps, uint32_t T1_us, uint32_t PRI1_us, uint32_t T2_ns, uint32_t PRI2_ns) {
     // NOTE: No per-chirp DIAG — this is a us/ns timing-critical path.
     // Only log entry params for post-mortem analysis.
-    DIAG("SYS", "executeChirpSequence: num_chirps=%d T1=%.2f PRI1=%.2f T2=%.2f PRI2=%.2f",
-         num_chirps, T1, PRI1, T2, PRI2);
+    DIAG("SYS", "executeChirpSequence: num_chirps=%d T1_us=%lu PRI1_us=%lu T2_ns=%lu PRI2_ns=%lu",
+         num_chirps,
+         (unsigned long)T1_us, (unsigned long)PRI1_us,
+         (unsigned long)T2_ns, (unsigned long)PRI2_ns);
+
+    // Guard against degenerate timing: unsigned (PRI - T) would wrap to
+    // ~4.29 s if the host ever misconfigures PRI < T.
+    const uint32_t PRI1_gap_us = (PRI1_us > T1_us) ? (PRI1_us - T1_us) : 0U;
+    const uint32_t PRI2_gap_ns = (PRI2_ns > T2_ns) ? (PRI2_ns - T2_ns) : 0U;
+
     // First chirp sequence (microsecond timing)
     for(int i = 0; i < num_chirps; i++) {
         HAL_GPIO_TogglePin(GPIOD, GPIO_PIN_8); // New chirp signal to FPGA
         adarManager.pulseTXMode();
-        delay_us((uint32_t)T1);
+        delay_us(T1_us);
         adarManager.pulseRXMode();
-        delay_us((uint32_t)(PRI1 - T1));
+        delay_us(PRI1_gap_us);
     }
 
     delay_us((uint32_t)Guard);
@@ -494,9 +512,9 @@ void executeChirpSequence(int num_chirps, float T1, float PRI1, float T2, float 
     for(int i = 0; i < num_chirps; i++) {
     	HAL_GPIO_TogglePin(GPIOD, GPIO_PIN_8); // New chirp signal to FPGA
         adarManager.pulseTXMode();
-        delay_ns((uint32_t)(T2 * 1000));
+        delay_ns(T2_ns);
         adarManager.pulseRXMode();
-        delay_ns((uint32_t)((PRI2 - T2) * 1000));
+        delay_ns(PRI2_gap_ns);
 
     }
 }
@@ -526,21 +544,27 @@ void runRadarPulseSequence() {
         adarManager.setCustomBeamPattern16(matrix1[beam_pos], ADAR1000Manager::BeamDirection::TX);
         adarManager.setCustomBeamPattern16(matrix1[beam_pos], ADAR1000Manager::BeamDirection::RX);
 
-        executeChirpSequence(m_max/2, T1, PRI1, T2, PRI2);
+        executeChirpSequence(m_max/2,
+                             (uint32_t)T1, (uint32_t)PRI1,
+                             (uint32_t)(T2 * 1000.0f), (uint32_t)(PRI2 * 1000.0f));
         m += m_max/2;
 
         // Pattern 2: vector_0 (broadside)
         adarManager.setCustomBeamPattern16(vector_0, ADAR1000Manager::BeamDirection::TX);
         adarManager.setCustomBeamPattern16(vector_0, ADAR1000Manager::BeamDirection::RX);
 
-        executeChirpSequence(m_max/2, T1, PRI1, T2, PRI2);
+        executeChirpSequence(m_max/2,
+                             (uint32_t)T1, (uint32_t)PRI1,
+                             (uint32_t)(T2 * 1000.0f), (uint32_t)(PRI2 * 1000.0f));
         m += m_max/2;
 
         // Pattern 3: matrix2 (negative steering angles)
         adarManager.setCustomBeamPattern16(matrix2[beam_pos], ADAR1000Manager::BeamDirection::TX);
         adarManager.setCustomBeamPattern16(matrix2[beam_pos], ADAR1000Manager::BeamDirection::RX);
 
-        executeChirpSequence(m_max/2, T1, PRI1, T2, PRI2);
+        executeChirpSequence(m_max/2,
+                             (uint32_t)T1, (uint32_t)PRI1,
+                             (uint32_t)(T2 * 1000.0f), (uint32_t)(PRI2 * 1000.0f));
         m += m_max/2;
 
         // Reset chirp counter if needed
@@ -916,41 +940,73 @@ bool checkSystemHealthStatus(void) {
     return true;
 }
 
-// Get system status for GUI
-// Get system status for GUI with 8 temperature variables
+// Get system status for GUI with 8 temperature variables.
+//
+// Formats directly into the caller-supplied status_buffer using
+// snprintf with a rolling write position. The previous implementation
+// built the full string in a 500-byte stack buffer via a chain of
+// strcat() calls that did no bounds checking: the string length is
+// ~440 bytes at typical values, but just a handful of wide GPS
+// coordinates (e.g. "-180.123456") or a long error string pushed it
+// close enough to 500 to make stack corruption a realistic failure
+// mode on an STM32F7 (no MMU -> silent corruption, not a fault).
+//
+// The helper below tracks the write position and aborts cleanly as
+// soon as the destination buffer is full; the last byte is always a
+// NUL terminator.
+static inline size_t safe_append(char* dst, size_t dst_size, size_t pos,
+                                 const char* fmt, ...) {
+    if (dst == nullptr || dst_size == 0 || pos >= dst_size - 1) {
+        return pos;
+    }
+    va_list ap;
+    va_start(ap, fmt);
+    int n = vsnprintf(dst + pos, dst_size - pos, fmt, ap);
+    va_end(ap);
+    if (n < 0) {
+        dst[pos] = '\0';
+        return pos;
+    }
+    if ((size_t)n >= dst_size - pos) {
+        // Truncated: vsnprintf already wrote a NUL at dst[dst_size-1].
+        return dst_size - 1;
+    }
+    return pos + (size_t)n;
+}
+
 void getSystemStatusForGUI(char* status_buffer, size_t buffer_size) {
-    char temp_buffer[200];
-    char final_status[500] = "System Status: ";
+    if (status_buffer == nullptr || buffer_size == 0) {
+        return;
+    }
+    status_buffer[0] = '\0';
+    size_t pos = 0;
+
+    pos = safe_append(status_buffer, buffer_size, pos, "System Status: ");
 
     // Basic status
-    if (system_emergency_state) {
-        strcat(final_status, "EMERGENCY_STOP|");
-    } else {
-        strcat(final_status, "NORMAL|");
-    }
+    pos = safe_append(status_buffer, buffer_size, pos, "%s|",
+                      system_emergency_state ? "EMERGENCY_STOP" : "NORMAL");
 
     // Error information
-    snprintf(temp_buffer, sizeof(temp_buffer), "LastError:%d|ErrorCount:%lu|",
-             last_error, error_count);
-    strcat(final_status, temp_buffer);
+    pos = safe_append(status_buffer, buffer_size, pos,
+                      "LastError:%d|ErrorCount:%lu|",
+                      last_error, error_count);
 
     // Sensor status
-    snprintf(temp_buffer, sizeof(temp_buffer), "IMU:%.1f,%.1f,%.1f|GPS:%.6f,%.6f|ALT:%.1f|",
-             Pitch_Sensor, Roll_Sensor, Yaw_Sensor,
-             RADAR_Latitude, RADAR_Longitude, RADAR_Altitude);
-    strcat(final_status, temp_buffer);
+    pos = safe_append(status_buffer, buffer_size, pos,
+                      "IMU:%.1f,%.1f,%.1f|GPS:%.6f,%.6f|ALT:%.1f|",
+                      Pitch_Sensor, Roll_Sensor, Yaw_Sensor,
+                      RADAR_Latitude, RADAR_Longitude, RADAR_Altitude);
 
     // LO Status
     bool tx_locked, rx_locked;
     ADF4382A_CheckLockStatus(&lo_manager, &tx_locked, &rx_locked);
-    snprintf(temp_buffer, sizeof(temp_buffer), "LO_TX:%s|LO_RX:%s|",
-             tx_locked ? "LOCKED" : "UNLOCKED",
-             rx_locked ? "LOCKED" : "UNLOCKED");
-    strcat(final_status, temp_buffer);
+    pos = safe_append(status_buffer, buffer_size, pos,
+                      "LO_TX:%s|LO_RX:%s|",
+                      tx_locked ? "LOCKED" : "UNLOCKED",
+                      rx_locked ? "LOCKED" : "UNLOCKED");
 
-    // Temperature readings (8 variables)
-    // You'll need to populate these temperature values from your sensors
-    // For now, I'll show how to format them - replace with actual temperature readings
+    // Temperature readings (8 channels on ADS7830 #3)
     Temperature_1 = ADS7830_Measure_SingleEnded(&hadc3, 0);
     Temperature_2 = ADS7830_Measure_SingleEnded(&hadc3, 1);
     Temperature_3 = ADS7830_Measure_SingleEnded(&hadc3, 2);
@@ -960,12 +1016,10 @@ void getSystemStatusForGUI(char* status_buffer, size_t buffer_size) {
     Temperature_7 = ADS7830_Measure_SingleEnded(&hadc3, 6);
     Temperature_8 = ADS7830_Measure_SingleEnded(&hadc3, 7);
 
-    // Format all 8 temperature variables
-    snprintf(temp_buffer, sizeof(temp_buffer),
-             "T1:%.1f|T2:%.1f|T3:%.1f|T4:%.1f|T5:%.1f|T6:%.1f|T7:%.1f|T8:%.1f|",
-             Temperature_1, Temperature_2, Temperature_3, Temperature_4,
-             Temperature_5, Temperature_6, Temperature_7, Temperature_8);
-    strcat(final_status, temp_buffer);
+    pos = safe_append(status_buffer, buffer_size, pos,
+                      "T1:%.1f|T2:%.1f|T3:%.1f|T4:%.1f|T5:%.1f|T6:%.1f|T7:%.1f|T8:%.1f|",
+                      Temperature_1, Temperature_2, Temperature_3, Temperature_4,
+                      Temperature_5, Temperature_6, Temperature_7, Temperature_8);
 
     // RF Power Amplifier status (if enabled)
     if (PowerAmplifier) {
@@ -975,32 +1029,41 @@ void getSystemStatusForGUI(char* status_buffer, size_t buffer_size) {
         }
         avg_current /= 16.0f;
 
-        snprintf(temp_buffer, sizeof(temp_buffer), "PA_AvgCurrent:%.2f|PA_Enabled:%d|",
-                 avg_current, PowerAmplifier);
-        strcat(final_status, temp_buffer);
+        pos = safe_append(status_buffer, buffer_size, pos,
+                          "PA_AvgCurrent:%.2f|PA_Enabled:%d|",
+                          avg_current, PowerAmplifier);
     }
 
     // Radar operation status
-    snprintf(temp_buffer, sizeof(temp_buffer), "BeamPos:%d|Azimuth:%d|ChirpCount:%d|",
-             n, y, m);
-    strcat(final_status, temp_buffer);
+    pos = safe_append(status_buffer, buffer_size, pos,
+                      "BeamPos:%d|Azimuth:%d|ChirpCount:%d|",
+                      n, y, m);
 
-    // Copy to output buffer
-    strncpy(status_buffer, final_status, buffer_size - 1);
+    // Defensive final NUL (vsnprintf already NUL-terminates, but pos may
+    // have advanced to dst_size-1 after truncation).
+    (void)pos;
     status_buffer[buffer_size - 1] = '\0';
 }
 
-/* ---------- UART printing helpers (Bug #8 FIXED: uncommented) ---------- */
+/* ---------- UART printing helpers ---------- */
+// Bounded timeout (ms). HAL_MAX_DELAY blocks the calling task forever
+// if UART3 ever wedges (stuck hardware flow control, disconnected
+// ST-Link CDC, etc.), and these helpers are called from the main loop
+// and error paths where that would hang the entire firmware. 100 ms is
+// well above the nominal transmit time for any human-readable status
+// line at the configured baud rate, so a healthy link never trips it.
+#define UART_PRINT_TIMEOUT_MS 100U
+
 static void uart_print(const char *msg)
 {
-    HAL_UART_Transmit(&huart3, (uint8_t*)msg, strlen(msg), HAL_MAX_DELAY);
+    HAL_UART_Transmit(&huart3, (uint8_t*)msg, strlen(msg), UART_PRINT_TIMEOUT_MS);
 }
 
 static void uart_println(const char *msg)
 {
-    HAL_UART_Transmit(&huart3, (uint8_t*)msg, strlen(msg), HAL_MAX_DELAY);
+    HAL_UART_Transmit(&huart3, (uint8_t*)msg, strlen(msg), UART_PRINT_TIMEOUT_MS);
     const char crlf[] = "\r\n";
-    HAL_UART_Transmit(&huart3, (uint8_t*)crlf, 2, HAL_MAX_DELAY);
+    HAL_UART_Transmit(&huart3, (uint8_t*)crlf, 2, UART_PRINT_TIMEOUT_MS);
 }
 
 /* ---------- Helper delay wrappers ---------- */
