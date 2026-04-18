@@ -904,12 +904,24 @@ always @(posedge clk_100m_buf or negedge sys_reset_n) begin
                 8'h02: host_trigger_pulse  <= 1'b1;
                 8'h03: host_detect_threshold <= usb_cmd_value;
                 8'h04: host_stream_control <= usb_cmd_value[2:0];
-                // Gap 2: chirp timing configuration
-                8'h10: host_long_chirp_cycles  <= usb_cmd_value;
-                8'h11: host_long_listen_cycles <= usb_cmd_value;
-                8'h12: host_guard_cycles       <= usb_cmd_value;
-                8'h13: host_short_chirp_cycles <= usb_cmd_value;
-                8'h14: host_short_listen_cycles <= usb_cmd_value;
+                // Gap 2: chirp timing configuration.
+                // Reject value==0 (would cause an underflow in the
+                // radar_mode_controller FSM where timer is compared
+                // against `cfg_<x>_cycles - 1`; a write of 0 would
+                // wrap that comparison to 16'hFFFF and stall the
+                // corresponding state for ~655 us per iteration).
+                // A 0 write is silently dropped so the last-good
+                // value (or reset default) stays in effect.
+                8'h10: if (usb_cmd_value != 16'd0)
+                           host_long_chirp_cycles  <= usb_cmd_value;
+                8'h11: if (usb_cmd_value != 16'd0)
+                           host_long_listen_cycles <= usb_cmd_value;
+                8'h12: if (usb_cmd_value != 16'd0)
+                           host_guard_cycles       <= usb_cmd_value;
+                8'h13: if (usb_cmd_value != 16'd0)
+                           host_short_chirp_cycles <= usb_cmd_value;
+                8'h14: if (usb_cmd_value != 16'd0)
+                           host_short_listen_cycles <= usb_cmd_value;
                 8'h15: begin
                     // Fix 4: Clamp chirps_per_elev to the fixed Doppler frame size.
                     // If host requests a different value, clamp and set error flag.
