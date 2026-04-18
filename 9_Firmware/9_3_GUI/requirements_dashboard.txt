@@ -1,5 +1,10 @@
 # AERIS-10 Radar Dashboard dependencies
-# Install: pip install -r requirements_dashboard.txt
+#
+# Developer install (loose bounds, latest compatible versions):
+#     pip install -r requirements_dashboard.txt
+#
+# Reproducible / CI install (pinned, matches what CI sees):
+#     pip install -r requirements-lock.txt
 
 numpy>=1.24
 matplotlib>=3.7

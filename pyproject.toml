@@ -1,0 +1,41 @@
+# Repo-level tooling config for Python code in 9_Firmware/9_3_GUI/.
+#
+# This file exists only to configure ruff and pre-commit. The project itself
+# is not a Python package — it is a firmware/RTL monorepo — so there is no
+# [project] table here.
+
+[tool.ruff]
+line-length = 120
+target-version = "py310"
+
+# Only lint the actively-supported host Python in 9_Firmware/9_3_GUI/.
+#
+# Scope kept deliberately narrow for this PR (audit item #10) so CI is green
+# on day one. Other Python in the repo (EM simulation scratch scripts under
+# 5_Simulations/, antenna tools under 8_Utils/Python/, FPGA cosim golden
+# generators under 9_Firmware/9_2_FPGA/tb/cosim/, legacy GUI prototypes in
+# 9_Firmware/9_3_GUI/archive/) has its own style and real F821/F841
+# findings that are out of scope for "add CI". Expand `include` in a
+# follow-up once those are cleaned.
+include = ["9_Firmware/9_3_GUI/*.py"]
+extend-exclude = [
+    "9_Firmware/9_3_GUI/archive",
+]
+
+[tool.ruff.lint]
+# Start with pyflakes (real bug patterns: unused imports, undefined names,
+# shadowed builtins) and the pycodestyle syntax-error family. Keeping the
+# ruleset small means CI will catch genuine regressions without drowning the
+# codebase in style noise on day one — the bare-except / BLE001 cleanup
+# (audit item #6) is deliberately a follow-up PR, not bundled here.
+select = ["F", "E9", "W6"]
+
+# E702 (multiple statements on one line) appears in a hot-loop packer in
+# radar_protocol.py where the semicolon form is deliberate and readable as a
+# table. Not worth the churn to split.
+ignore = ["E702"]
+
+[tool.ruff.lint.per-file-ignores]
+# Tests commonly import symbols they don't use directly, for wildcard
+# convenience and for asserting they're exported. Don't flag that here.
+"9_Firmware/9_3_GUI/test_*.py" = ["F401"]
