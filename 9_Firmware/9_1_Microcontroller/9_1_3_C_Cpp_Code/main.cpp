@@ -1382,55 +1382,16 @@ void initializeBeamMatricesWithSteeringAngles() {
 
 /* USER CODE END 0 */
 
-/**
-  * @brief  The application entry point.
-  * @retval int
-  */
-int main(void)
+/* =====================================================================
+ *   Initialisation + main-loop phases extracted from the old 800-line
+ *   int main().  Each phase_*() / loop_*() is a static function holding
+ *   a contiguous block of code lifted verbatim from main(); no logic is
+ *   re-ordered or re-written.  They reference the file-scope globals
+ *   declared above (HAL handles, imu, lo_manager, Idq_reading, ...).
+ * ===================================================================== */
+
+static void phase_init_dwt_and_diag(void)
 {
-
-  /* USER CODE BEGIN 1 */
-
-  /* USER CODE END 1 */
-
-  /* MPU Configuration--------------------------------------------------------*/
-  MPU_Config();
-
-  /* MCU Configuration--------------------------------------------------------*/
-
-  /* Reset of all peripherals, Initializes the Flash interface and the Systick. */
-  HAL_Init();
-
-  /* USER CODE BEGIN Init */
-
-  /* USER CODE END Init */
-
-  /* Configure the system clock */
-  SystemClock_Config();
-
-  /* Configure the peripherals common clocks */
-  PeriphCommonClock_Config();
-
-  /* USER CODE BEGIN SysInit */
-
-
-  /* USER CODE END SysInit */
-
-  /* Initialize all configured peripherals */
-  MX_GPIO_Init();
-  MX_TIM1_Init();
-  MX_TIM3_Init();  // B15 fix: init DELADJ PWM timer before LO manager uses it
-  MX_I2C1_Init();
-  MX_I2C2_Init();
-  MX_I2C3_Init();
-  MX_SPI1_Init();
-  MX_SPI4_Init();
-  MX_UART5_Init();
-  MX_USART3_UART_Init();
-  MX_USB_DEVICE_Init();
-  MX_IWDG_Init();  /* GAP-3 FIX 2: start hardware watchdog (~4 s timeout) */
-  /* USER CODE BEGIN 2 */
-
   HAL_TIM_Base_Start(&htim1);
 
   /* --- Enable DWT cycle counter for accurate microsecond delays --- */
@@ -1439,7 +1400,10 @@ int main(void)
   DIAG_SECTION("SYSTEM INIT");
   DIAG("SYS", "DWT cycle counter initialized, TIM1 started");
   DIAG("SYS", "HAL tick at init start: %lu ms", (unsigned long)HAL_GetTick());
+}
 
+static void phase_ocxo_warmup(void)
+{
   //Wait for OCXO 3mn
   DIAG("CLK", "OCXO warmup starting -- waiting 180 s (3 min)");
   uint32_t ocxo_start = HAL_GetTick();
@@ -1450,7 +1414,10 @@ int main(void)
       HAL_Delay(1000);
   }
   DIAG_ELAPSED("CLK", "OCXO warmup", ocxo_start);
+}
 
+static void phase_init_clock_chip(void)
+{
   DIAG_SECTION("AD9523 POWER SEQUENCING");
   DIAG("PWR", "Asserting AD9523 reset (pin LOW)");
   HAL_GPIO_WritePin(AD9523_RESET_GPIO_Port,AD9523_RESET_Pin,GPIO_PIN_RESET);
@@ -1493,7 +1460,10 @@ int main(void)
   }
   DIAG_ELAPSED("CLK", "configure_ad9523()", ad9523_cfg_start);
   DIAG("CLK", "AD9523 configured successfully");
+}
 
+static void phase_fpga_power_up(void)
+{
   //Power sequencing FPGA
   DIAG_SECTION("FPGA POWER SEQUENCING");
   DIAG("PWR", "Enabling 1.0V FPGA rail");
@@ -1506,8 +1476,10 @@ int main(void)
   HAL_GPIO_WritePin(EN_P_3V3_FPGA_GPIO_Port,EN_P_3V3_FPGA_Pin,GPIO_PIN_SET);
   HAL_Delay(100);
   DIAG("PWR", "FPGA power sequencing complete -- 1.0V -> 1.8V -> 3.3V");
+}
 
-
+static void phase_imu_init_and_calibrate(void)
+{
 // Initialize module IMU
   DIAG_SECTION("IMU INIT (GY-85)");
   DIAG("IMU", "Initializing GY-85 IMU...");
@@ -1624,7 +1596,10 @@ int main(void)
     HAL_Delay(300);
 
   }
+}
 
+static void phase_barometer_init(void)
+{
     ///////////////////////////////////////////////////////////////////////////////////
     ///////////////////////////////////BAROMETER BMP180////////////////////////////////
     ///////////////////////////////////////////////////////////////////////////////////
@@ -1636,7 +1611,10 @@ int main(void)
 		HAL_Delay(100);
   	}
     DIAG("IMU", "Barometer init complete, RADAR_Altitude baseline set");
+}
 
+static void phase_lo_init_and_lock(void)
+{
     ///////////////////////////////////////////////////////////////////////////////////
     ///////////////////////////////////////ADF4382/////////////////////////////////////
     ///////////////////////////////////////////////////////////////////////////////////
@@ -1751,8 +1729,10 @@ int main(void)
       HAL_GPIO_WritePin(LED_2_GPIO_Port, LED_2_Pin, GPIO_PIN_RESET);
       DIAG_WARN("LO", "RX NOT locked via GPIO -- LED_2 OFF");
   }
+}
 
-
+static void phase_beamformer_init(void)
+{
   //////////////////////////////////////////////////////////////////////////////////////
   /////////////////////////////////////ADAR1000/////////////////////////////////////////
   //////////////////////////////////////////////////////////////////////////////////////
@@ -1788,7 +1768,10 @@ int main(void)
       // Print system status
       printSystemStatus();
       DIAG("SYS", "System init complete -- entering main loop");
+}
 
+static void phase_gps_and_stepper(void)
+{
   	//////////////////////////////////////////////////////////////////////////////////////
     //////////////////////////////////////////GPS/////////////////////////////////////////
     //////////////////////////////////////////////////////////////////////////////////////
@@ -1807,7 +1790,10 @@ int main(void)
 	  HAL_GPIO_WritePin(STEPPER_CLK_P_GPIO_Port, STEPPER_CLK_P_Pin, GPIO_PIN_RESET);
 	  delay_us(500);
   }
+}
 
+static void phase_gui_handshake(void)
+{
   /***************************************************************/
   /**********wait for GUI start flag and Send Lat/Long/alt********/
   /***************************************************************/
@@ -1844,7 +1830,10 @@ int main(void)
 
               }
   }while(!usbHandler.isStartFlagReceived());
+}
 
+static void phase_pa_powerup_and_calibrate(void)
+{
   /***************************************************************/
   /************RF Power Amplifier Powering up sequence************/
   /***************************************************************/
@@ -1981,7 +1970,10 @@ int main(void)
 	  }
 	  DIAG("PA", "PA IDQ calibration sequence COMPLETE");
   }
+}
 
+static void phase_fpga_reset_and_enable_tx(void)
+{
   //RESET FPGA
   DIAG("FPGA", "Resetting FPGA (GPIOD pin 12: LOW -> 10ms -> HIGH)");
   HAL_GPIO_WritePin(GPIOD, GPIO_PIN_12, GPIO_PIN_RESET);
@@ -1994,7 +1986,10 @@ int main(void)
   //Tell FPGA to apply TX RF by enabling Mixers
   DIAG("FPGA", "Enabling TX mixers (GPIOD pin 11 HIGH)");
   HAL_GPIO_WritePin(GPIOD, GPIO_PIN_11, GPIO_PIN_SET);
+}
 
+static void phase_temp_sensor_init(void)
+{
   /* T°C sensor TMP37 ADC3: Address 0x49, Single-Ended mode, Internal Ref ON + ADC ON */
   DIAG("SYS", "Initializing temperature sensor ADC3 (I2C2, addr=0x49, TMP37)");
   if (!ADS7830_Init(&hadc3, &hi2c2, 0x49,
@@ -2003,7 +1998,10 @@ int main(void)
 	  Error_Handler();
   }
   DIAG("SYS", "Temperature sensor ADC3 init OK");
+}
 
+static void phase_error_handler_init(void)
+{
   /***************************************************************/
   /************************ERRORS HANDLERS************************/
   /***************************************************************/
@@ -2013,7 +2011,10 @@ int main(void)
   error_count = 0;
   last_error = ERROR_NONE;
   system_emergency_state = false;
+}
 
+static void phase_send_initial_status(void)
+{
   /***************************************************************/
   /*********************SEND TO GUI STATUS************************/
   /***************************************************************/
@@ -2025,22 +2026,10 @@ int main(void)
   // Send via USB to GUI
   CDC_Transmit_FS((uint8_t*)initial_status, strlen(initial_status));
   DIAG("USB", "Initial status sent (%d bytes)", (int)strlen(initial_status));
+}
 
-  DIAG("SYS", "=== INIT COMPLETE -- entering main loop ===");
-
-
-
-
-
-
-  // main loop
-
-  /* USER CODE END 2 */
-
-  /* Infinite loop */
-  /* USER CODE BEGIN WHILE */
-  while (1)
-  {
+static void loop_check_health_or_safe_mode(void)
+{
 	  //////////////////////////////////////////////////////////////////////////////////////
 	  //////////////////////// Check system health at the start of each loop////////////////
 	  //////////////////////////////////////////////////////////////////////////////////////
@@ -2067,6 +2056,10 @@ int main(void)
 	        }
 	        DIAG("SYS", "Exited safe mode blink loop -- system_emergency_state cleared");
 	    }
+}
+
+static void loop_monitor_lo_lock(void)
+{
 	  //////////////////////////////////////////////////////////////////////////////////////
 	  ////////////////////////// Monitor ADF4382A lock status periodically//////////////////
 	  //////////////////////////////////////////////////////////////////////////////////////
@@ -2091,6 +2084,10 @@ int main(void)
 
           last_check = HAL_GetTick();
       }
+}
+
+static void loop_monitor_temps_and_idq(void)
+{
 	  //////////////////////////////////////////////////////////////////////////////////////
 	  ////////////////////////// Monitor Temperature Sensors periodically//////////////////
 	  //////////////////////////////////////////////////////////////////////////////////////
@@ -2168,6 +2165,107 @@ int main(void)
 		   * so the temperature timer runs independently of the lock-check timer. */
 		  last_check1 = HAL_GetTick();
 		  }
+}
+
+/**
+  * @brief  The application entry point.
+  * @retval int
+  */
+int main(void)
+{
+
+  /* USER CODE BEGIN 1 */
+
+  /* USER CODE END 1 */
+
+  /* MPU Configuration--------------------------------------------------------*/
+  MPU_Config();
+
+  /* MCU Configuration--------------------------------------------------------*/
+
+  /* Reset of all peripherals, Initializes the Flash interface and the Systick. */
+  HAL_Init();
+
+  /* USER CODE BEGIN Init */
+
+  /* USER CODE END Init */
+
+  /* Configure the system clock */
+  SystemClock_Config();
+
+  /* Configure the peripherals common clocks */
+  PeriphCommonClock_Config();
+
+  /* USER CODE BEGIN SysInit */
+
+
+  /* USER CODE END SysInit */
+
+  /* Initialize all configured peripherals */
+  MX_GPIO_Init();
+  MX_TIM1_Init();
+  MX_TIM3_Init();  // B15 fix: init DELADJ PWM timer before LO manager uses it
+  MX_I2C1_Init();
+  MX_I2C2_Init();
+  MX_I2C3_Init();
+  MX_SPI1_Init();
+  MX_SPI4_Init();
+  MX_UART5_Init();
+  MX_USART3_UART_Init();
+  MX_USB_DEVICE_Init();
+  MX_IWDG_Init();  /* GAP-3 FIX 2: start hardware watchdog (~4 s timeout) */
+  /* USER CODE BEGIN 2 */
+
+  phase_init_dwt_and_diag();
+
+  phase_ocxo_warmup();
+
+  phase_init_clock_chip();
+
+  phase_fpga_power_up();
+
+
+  phase_imu_init_and_calibrate();
+
+  phase_barometer_init();
+
+  phase_lo_init_and_lock();
+
+
+  phase_beamformer_init();
+
+  phase_gps_and_stepper();
+
+  phase_gui_handshake();
+
+  phase_pa_powerup_and_calibrate();
+
+  phase_fpga_reset_and_enable_tx();
+
+  phase_temp_sensor_init();
+
+  phase_error_handler_init();
+
+  phase_send_initial_status();
+
+  DIAG("SYS", "=== INIT COMPLETE -- entering main loop ===");
+
+
+
+
+
+
+  // main loop
+
+  /* USER CODE END 2 */
+
+  /* Infinite loop */
+  /* USER CODE BEGIN WHILE */
+  while (1)
+  {
+  loop_check_health_or_safe_mode();
+  loop_monitor_lo_lock();
+  loop_monitor_temps_and_idq();
 	  //////////////////////////////////////////////////////////////////////////////////////
 	  /////////////////////////////////////ADAR1000/////////////////////////////////////////
 	  //////////////////////////////////////////////////////////////////////////////////////
