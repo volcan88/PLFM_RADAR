@@ -266,13 +266,28 @@ end
 // sample_addr_wire removed — was unused implicit wire (synthesis warning)
 
 // 4. CRITICAL: Reference Chirp Latency Buffer
-// This aligns reference data with FFT output (2159 cycle delay)
+//
+// The reference chirp stream must arrive at the correlator aligned with
+// the live-signal stream after the matched-filter FFT pipeline. Any
+// mismatch here collapses the pulse-compression output, so this value is
+// tied directly to the pipeline depth of matched_filter_processing_chain
+// (forward FFT + conjugate multiply + inverse FFT + pipeline registers).
+//
+// REF_CHIRP_LATENCY must equal the measured end-to-end latency of that
+// pipeline in clock cycles. It was previously buried in the instantiation
+// as a magic 3187; any future change to the FFT IP (N, Radix, BREG/MREG)
+// requires re-measuring and updating this single constant instead of a
+// scattered literal. latency_buffer.v itself documents the rename from
+// latency_buffer_2159 -> latency_buffer that was done to match this
+// parameterised value.
+localparam integer REF_CHIRP_LATENCY = 3187;
+
 wire [15:0] delayed_ref_i, delayed_ref_q;
 wire mem_ready_delayed;
 
 latency_buffer #(
     .DATA_WIDTH(32),  // 16-bit I + 16-bit Q
-	.LATENCY(3187)
+    .LATENCY(REF_CHIRP_LATENCY)
 ) ref_latency_buffer (
     .clk(clk),
     .reset_n(reset_n),
