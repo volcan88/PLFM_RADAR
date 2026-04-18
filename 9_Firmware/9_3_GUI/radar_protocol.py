@@ -50,20 +50,27 @@ WATERFALL_DEPTH = 64
 
 
 class Opcode(IntEnum):
-    """Host register opcodes (matches radar_system_top.v command decode)."""
-    TRIGGER             = 0x01
-    PRF_DIV             = 0x02
-    NUM_CHIRPS          = 0x03
-    CHIRP_TIMER         = 0x04
-    STREAM_ENABLE       = 0x05
-    GAIN_SHIFT          = 0x06
-    THRESHOLD           = 0x10
+    """Host register opcodes.
+
+    Authoritative source: radar_system_top.v command decoder (case on
+    usb_cmd_opcode, lines ~901-945). Every value below has been
+    cross-checked against the RTL decoder. Do NOT change a value here
+    without updating the RTL and tb_usb_command_decoder.
+    """
+    # --- Core radar control (8'h01 - 8'h04) ---
+    RADAR_MODE          = 0x01   # host_radar_mode (2-bit select)
+    TRIGGER             = 0x02   # host_trigger_pulse (self-clearing)
+    THRESHOLD           = 0x03   # host_detect_threshold (simple threshold)
+    STREAM_ENABLE       = 0x04   # host_stream_control (3-bit enable)
+    # --- Chirp timing (8'h10 - 8'h16) ---
     LONG_CHIRP          = 0x10
     LONG_LISTEN         = 0x11
     GUARD               = 0x12
     SHORT_CHIRP         = 0x13
     SHORT_LISTEN        = 0x14
     CHIRPS_PER_ELEV     = 0x15
+    GAIN_SHIFT          = 0x16   # host_gain_shift (4-bit)
+    # --- Range / CFAR / MTI / DC notch (8'h20 - 8'h27) ---
     RANGE_MODE          = 0x20
     CFAR_GUARD          = 0x21
     CFAR_TRAIN          = 0x22
@@ -72,9 +79,22 @@ class Opcode(IntEnum):
     CFAR_ENABLE         = 0x25
     MTI_ENABLE          = 0x26
     DC_NOTCH_WIDTH      = 0x27
+    # --- Self-test / status (8'h30, 8'h31, 8'hFF) ---
     SELF_TEST_TRIGGER   = 0x30
     SELF_TEST_STATUS    = 0x31
     STATUS_REQUEST      = 0xFF
+
+    # ------------------------------------------------------------------
+    # Reserved — not implemented in FPGA yet
+    # ------------------------------------------------------------------
+    # The following names were previously defined but never decoded in
+    # radar_system_top.v. They are kept as documentation placeholders so
+    # that any future firmware adding PRF division / chirp scheduling
+    # registers can be mapped to them explicitly.
+    #
+    #   PRF_DIV        = 0x??  # Reserved — not implemented in FPGA yet
+    #   NUM_CHIRPS     = 0x??  # Reserved — not implemented in FPGA yet
+    #   CHIRP_TIMER    = 0x??  # Reserved — not implemented in FPGA yet
 
 
 # ============================================================================
@@ -400,35 +420,38 @@ class FT2232HConnection:
 # Replay Connection — feed real .npy data through the dashboard
 # ============================================================================
 
-# Hardware-only opcodes that cannot be adjusted in replay mode
+# Hardware-only opcodes that cannot be adjusted in replay mode.
+# Values mirror Opcode enum above; kept as raw ints to avoid a circular
+# dependency on the enum at module import time. Must match RTL decoder
+# in radar_system_top.v (case on usb_cmd_opcode).
 _HARDWARE_ONLY_OPCODES = {
-    0x01,  # TRIGGER
-    0x02,  # PRF_DIV
-    0x03,  # NUM_CHIRPS
-    0x04,  # CHIRP_TIMER
-    0x05,  # STREAM_ENABLE
-    0x06,  # GAIN_SHIFT
-    0x10,  # THRESHOLD / LONG_CHIRP
-    0x11,  # LONG_LISTEN
-    0x12,  # GUARD
-    0x13,  # SHORT_CHIRP
-    0x14,  # SHORT_LISTEN
-    0x15,  # CHIRPS_PER_ELEV
-    0x20,  # RANGE_MODE
-    0x30,  # SELF_TEST_TRIGGER
-    0x31,  # SELF_TEST_STATUS
-    0xFF,  # STATUS_REQUEST
+    int(Opcode.RADAR_MODE),        # 0x01
+    int(Opcode.TRIGGER),           # 0x02
+    int(Opcode.THRESHOLD),         # 0x03 (detect_threshold)
+    int(Opcode.STREAM_ENABLE),     # 0x04
+    int(Opcode.LONG_CHIRP),        # 0x10
+    int(Opcode.LONG_LISTEN),       # 0x11
+    int(Opcode.GUARD),             # 0x12
+    int(Opcode.SHORT_CHIRP),       # 0x13
+    int(Opcode.SHORT_LISTEN),      # 0x14
+    int(Opcode.CHIRPS_PER_ELEV),   # 0x15
+    int(Opcode.GAIN_SHIFT),        # 0x16
+    int(Opcode.RANGE_MODE),        # 0x20
+    int(Opcode.SELF_TEST_TRIGGER), # 0x30
+    int(Opcode.SELF_TEST_STATUS),  # 0x31
+    int(Opcode.STATUS_REQUEST),    # 0xFF
 }
 
-# Replay-adjustable opcodes (re-run signal processing)
+# Replay-adjustable opcodes (re-run signal processing).
+# Values mirror Opcode enum above.
 _REPLAY_ADJUSTABLE_OPCODES = {
-    0x21,  # CFAR_GUARD
-    0x22,  # CFAR_TRAIN
-    0x23,  # CFAR_ALPHA
-    0x24,  # CFAR_MODE
-    0x25,  # CFAR_ENABLE
-    0x26,  # MTI_ENABLE
-    0x27,  # DC_NOTCH_WIDTH
+    int(Opcode.CFAR_GUARD),     # 0x21
+    int(Opcode.CFAR_TRAIN),     # 0x22
+    int(Opcode.CFAR_ALPHA),     # 0x23
+    int(Opcode.CFAR_MODE),      # 0x24
+    int(Opcode.CFAR_ENABLE),    # 0x25
+    int(Opcode.MTI_ENABLE),     # 0x26
+    int(Opcode.DC_NOTCH_WIDTH), # 0x27
 }
 
 

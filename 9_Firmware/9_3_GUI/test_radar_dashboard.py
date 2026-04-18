@@ -31,32 +31,39 @@ class TestRadarProtocol(unittest.TestCase):
     # ----------------------------------------------------------------
     # Command building
     # ----------------------------------------------------------------
-    def test_build_command_trigger(self):
-        """Opcode 0x01, value 1 → {0x01, 0x00, 0x0001}."""
-        cmd = RadarProtocol.build_command(0x01, 1)
+    def test_build_command_radar_mode(self):
+        """Opcode RADAR_MODE (0x01), value 1 → {0x01, 0x00, 0x0001}."""
+        cmd = RadarProtocol.build_command(Opcode.RADAR_MODE, 1)
         self.assertEqual(len(cmd), 4)
         word = struct.unpack(">I", cmd)[0]
         self.assertEqual((word >> 24) & 0xFF, 0x01)  # opcode
         self.assertEqual((word >> 16) & 0xFF, 0x00)  # addr
         self.assertEqual(word & 0xFFFF, 1)            # value
 
+    def test_build_command_trigger(self):
+        """Opcode TRIGGER (0x02) matches RTL host_trigger_pulse decoder."""
+        cmd = RadarProtocol.build_command(Opcode.TRIGGER, 1)
+        word = struct.unpack(">I", cmd)[0]
+        self.assertEqual((word >> 24) & 0xFF, 0x02)
+        self.assertEqual(word & 0xFFFF, 1)
+
     def test_build_command_cfar_alpha(self):
-        """Opcode 0x23, value 0x30 (alpha=3.0 Q4.4)."""
-        cmd = RadarProtocol.build_command(0x23, 0x30)
+        """Opcode CFAR_ALPHA (0x23), value 0x30 (alpha=3.0 Q4.4)."""
+        cmd = RadarProtocol.build_command(Opcode.CFAR_ALPHA, 0x30)
         word = struct.unpack(">I", cmd)[0]
         self.assertEqual((word >> 24) & 0xFF, 0x23)
         self.assertEqual(word & 0xFFFF, 0x30)
 
     def test_build_command_status_request(self):
-        """Opcode 0xFF, value 0."""
-        cmd = RadarProtocol.build_command(0xFF, 0)
+        """Opcode STATUS_REQUEST (0xFF), value 0."""
+        cmd = RadarProtocol.build_command(Opcode.STATUS_REQUEST, 0)
         word = struct.unpack(">I", cmd)[0]
         self.assertEqual((word >> 24) & 0xFF, 0xFF)
         self.assertEqual(word & 0xFFFF, 0)
 
     def test_build_command_with_addr(self):
-        """Command with non-zero addr field."""
-        cmd = RadarProtocol.build_command(0x10, 500, addr=0x42)
+        """Command with non-zero addr field (LONG_CHIRP = 0x10)."""
+        cmd = RadarProtocol.build_command(Opcode.LONG_CHIRP, 500, addr=0x42)
         word = struct.unpack(">I", cmd)[0]
         self.assertEqual((word >> 24) & 0xFF, 0x10)
         self.assertEqual((word >> 16) & 0xFF, 0x42)
@@ -64,7 +71,7 @@ class TestRadarProtocol(unittest.TestCase):
 
     def test_build_command_value_clamp(self):
         """Value > 0xFFFF should be masked to 16 bits."""
-        cmd = RadarProtocol.build_command(0x01, 0x1FFFF)
+        cmd = RadarProtocol.build_command(Opcode.RADAR_MODE, 0x1FFFF)
         word = struct.unpack(">I", cmd)[0]
         self.assertEqual(word & 0xFFFF, 0xFFFF)
 
@@ -417,15 +424,16 @@ class TestEndToEnd(unittest.TestCase):
     """End-to-end: build command → parse response → verify round-trip."""
 
     def test_command_roundtrip_all_opcodes(self):
-        """Verify all opcodes produce valid 4-byte commands."""
-        opcodes = [0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x10, 0x11, 0x12,
-                   0x13, 0x14, 0x15, 0x20, 0x21, 0x22, 0x23, 0x24, 0x25,
-                   0x26, 0x27, 0x30, 0x31, 0xFF]
-        for op in opcodes:
+        """Verify every Opcode enum member produces a valid 4-byte command.
+
+        Uses the enum directly so the test auto-tracks any future
+        additions/removals rather than hard-coding a list.
+        """
+        for op in Opcode:
             cmd = RadarProtocol.build_command(op, 42)
-            self.assertEqual(len(cmd), 4, f"opcode 0x{op:02X}")
+            self.assertEqual(len(cmd), 4, f"opcode {op.name} (0x{int(op):02X})")
             word = struct.unpack(">I", cmd)[0]
-            self.assertEqual((word >> 24) & 0xFF, op)
+            self.assertEqual((word >> 24) & 0xFF, int(op))
             self.assertEqual(word & 0xFFFF, 42)
 
     def test_data_packet_roundtrip(self):
@@ -603,7 +611,7 @@ class TestReplayConnection(unittest.TestCase):
         conn = ReplayConnection(self.NPY_DIR, use_mti=True)
         conn.open()
         # Change DC notch to 0 (no notch)
-        cmd = RadarProtocol.build_command(0x27, 0)
+        cmd = RadarProtocol.build_command(Opcode.DC_NOTCH_WIDTH, 0)
         conn.write(cmd)
         self.assertTrue(conn._needs_rebuild)
         self.assertEqual(conn._dc_notch_width, 0)
@@ -624,11 +632,11 @@ class TestReplayConnection(unittest.TestCase):
         conn = ReplayConnection(self.NPY_DIR, use_mti=True)
         conn.open()
         # Send TRIGGER (hardware-only)
-        cmd = RadarProtocol.build_command(0x01, 1)
+        cmd = RadarProtocol.build_command(Opcode.TRIGGER, 1)
         conn.write(cmd)
         self.assertFalse(conn._needs_rebuild)
         # Send STREAM_ENABLE (hardware-only)
-        cmd = RadarProtocol.build_command(0x05, 7)
+        cmd = RadarProtocol.build_command(Opcode.STREAM_ENABLE, 7)
         conn.write(cmd)
         self.assertFalse(conn._needs_rebuild)
         conn.close()
@@ -641,7 +649,7 @@ class TestReplayConnection(unittest.TestCase):
         conn = ReplayConnection(self.NPY_DIR, use_mti=True)
         conn.open()
         # CFAR guard already 2
-        cmd = RadarProtocol.build_command(0x21, 2)
+        cmd = RadarProtocol.build_command(Opcode.CFAR_GUARD, 2)
         conn.write(cmd)
         self.assertFalse(conn._needs_rebuild)
         conn.close()
@@ -654,27 +662,51 @@ class TestReplayConnection(unittest.TestCase):
         conn = ReplayConnection(self.NPY_DIR, use_mti=True)
         conn.open()
         # Send self-test trigger
-        cmd = RadarProtocol.build_command(0x30, 1)
+        cmd = RadarProtocol.build_command(Opcode.SELF_TEST_TRIGGER, 1)
         conn.write(cmd)
         self.assertFalse(conn._needs_rebuild)
         # Send self-test status request
-        cmd = RadarProtocol.build_command(0x31, 0)
+        cmd = RadarProtocol.build_command(Opcode.SELF_TEST_STATUS, 0)
         conn.write(cmd)
         self.assertFalse(conn._needs_rebuild)
         conn.close()
 
 
 class TestOpcodeEnum(unittest.TestCase):
-    """Verify Opcode enum matches RTL host register map."""
+    """Verify Opcode enum matches the RTL host-register decoder.
 
-    def test_gain_shift_is_0x06(self):
-        """GAIN_SHIFT opcode must be 0x06 (not 0x16)."""
-        self.assertEqual(Opcode.GAIN_SHIFT, 0x06)
+    Authoritative RTL source: ``radar_system_top.v`` (case on
+    ``usb_cmd_opcode``, lines ~901-945). Any future change to the
+    decoder must update these tests in lock-step.
+    """
 
-    def test_no_digital_gain_alias(self):
-        """DIGITAL_GAIN should NOT exist (was bogus 0x16 alias)."""
-        self.assertFalse(hasattr(Opcode, 'DIGITAL_GAIN'))
+    # Core radar control (0x01 - 0x04)
+    def test_radar_mode_is_0x01(self):
+        """RADAR_MODE opcode must be 0x01 (host_radar_mode)."""
+        self.assertEqual(Opcode.RADAR_MODE, 0x01)
 
+    def test_trigger_is_0x02(self):
+        """TRIGGER opcode must be 0x02 (host_trigger_pulse)."""
+        self.assertEqual(Opcode.TRIGGER, 0x02)
+
+    def test_threshold_is_0x03(self):
+        """THRESHOLD opcode must be 0x03 (host_detect_threshold)."""
+        self.assertEqual(Opcode.THRESHOLD, 0x03)
+
+    def test_stream_enable_is_0x04(self):
+        """STREAM_ENABLE opcode must be 0x04 (host_stream_control)."""
+        self.assertEqual(Opcode.STREAM_ENABLE, 0x04)
+
+    # Chirp timing / gain (0x10 - 0x16)
+    def test_long_chirp_is_0x10(self):
+        """LONG_CHIRP opcode must be 0x10 (host_long_chirp_cycles)."""
+        self.assertEqual(Opcode.LONG_CHIRP, 0x10)
+
+    def test_gain_shift_is_0x16(self):
+        """GAIN_SHIFT opcode must be 0x16 (host_gain_shift)."""
+        self.assertEqual(Opcode.GAIN_SHIFT, 0x16)
+
+    # Self-test / status
     def test_self_test_trigger(self):
         """SELF_TEST_TRIGGER opcode must be 0x30."""
         self.assertEqual(Opcode.SELF_TEST_TRIGGER, 0x30)
@@ -683,28 +715,59 @@ class TestOpcodeEnum(unittest.TestCase):
         """SELF_TEST_STATUS opcode must be 0x31."""
         self.assertEqual(Opcode.SELF_TEST_STATUS, 0x31)
 
+    def test_status_request(self):
+        """STATUS_REQUEST opcode must be 0xFF."""
+        self.assertEqual(Opcode.STATUS_REQUEST, 0xFF)
+
+    # Invariants
+    def test_no_duplicate_opcode_values(self):
+        """No two Opcode members may share the same numeric value."""
+        members = list(Opcode.__members__.values())
+        values = [int(m) for m in members]
+        self.assertEqual(len(values), len(set(values)),
+                         f"duplicate opcode value detected in Opcode enum: {values}")
+
+    def test_no_stale_opcodes(self):
+        """Legacy names (PRF_DIV, NUM_CHIRPS, CHIRP_TIMER) must be removed.
+
+        These were never decoded in ``radar_system_top.v``; they are kept
+        as *commented* reserved placeholders in radar_protocol.py only.
+        """
+        for stale in ("PRF_DIV", "NUM_CHIRPS", "CHIRP_TIMER", "DIGITAL_GAIN"):
+            self.assertFalse(hasattr(Opcode, stale),
+                             f"stale opcode name still present: {stale}")
+
     def test_self_test_in_hardware_only(self):
         """Self-test opcodes must be in _HARDWARE_ONLY_OPCODES."""
-        self.assertIn(0x30, _HARDWARE_ONLY_OPCODES)
-        self.assertIn(0x31, _HARDWARE_ONLY_OPCODES)
+        self.assertIn(int(Opcode.SELF_TEST_TRIGGER), _HARDWARE_ONLY_OPCODES)
+        self.assertIn(int(Opcode.SELF_TEST_STATUS), _HARDWARE_ONLY_OPCODES)
 
-    def test_0x16_not_in_hardware_only(self):
-        """Bogus 0x16 must not be in _HARDWARE_ONLY_OPCODES."""
-        self.assertNotIn(0x16, _HARDWARE_ONLY_OPCODES)
-
-    def test_stream_enable_is_0x05(self):
-        """STREAM_ENABLE must be 0x05 (not 0x04)."""
-        self.assertEqual(Opcode.STREAM_ENABLE, 0x05)
+    def test_gain_shift_in_hardware_only(self):
+        """GAIN_SHIFT (0x16) is a hardware register and must be hardware-only."""
+        self.assertIn(int(Opcode.GAIN_SHIFT), _HARDWARE_ONLY_OPCODES)
+        self.assertEqual(int(Opcode.GAIN_SHIFT), 0x16)
 
     def test_all_rtl_opcodes_present(self):
-        """Every RTL opcode has a matching Opcode enum member."""
-        expected = {0x01, 0x02, 0x03, 0x04, 0x05, 0x06,
-                    0x10, 0x11, 0x12, 0x13, 0x14, 0x15,
-                    0x20, 0x21, 0x22, 0x23, 0x24, 0x25, 0x26, 0x27,
-                    0x30, 0x31, 0xFF}
-        enum_values = set(int(m) for m in Opcode)
-        for op in expected:
-            self.assertIn(op, enum_values, f"0x{op:02X} missing from Opcode enum")
+        """Every opcode decoded in RTL has a matching Opcode enum member.
+
+        Set below mirrors the case statement in radar_system_top.v.
+        Update in lock-step when adding a new opcode to the decoder.
+        """
+        rtl_decoded = {0x01, 0x02, 0x03, 0x04,
+                       0x10, 0x11, 0x12, 0x13, 0x14, 0x15, 0x16,
+                       0x20, 0x21, 0x22, 0x23, 0x24, 0x25, 0x26, 0x27,
+                       0x30, 0x31, 0xFF}
+        enum_values = {int(m) for m in Opcode}
+        missing = sorted(rtl_decoded - enum_values)
+        extra = sorted(enum_values - rtl_decoded)
+        self.assertFalse(
+            missing,
+            "RTL opcodes missing from Opcode enum: "
+            + ", ".join(f"0x{v:02X}" for v in missing))
+        self.assertFalse(
+            extra,
+            "Opcode enum has values not decoded in RTL: "
+            + ", ".join(f"0x{v:02X}" for v in extra))
 
 
 class TestStatusResponseDefaults(unittest.TestCase):

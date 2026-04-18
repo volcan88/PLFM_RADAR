@@ -10,7 +10,7 @@ Features:
   - Real-time range-Doppler magnitude heatmap (64x32)
   - CFAR detection overlay (flagged cells highlighted)
   - Range profile waterfall plot (range vs. time)
-  - Host command sender (opcodes 0x01-0x27, 0x30, 0xFF)
+  - Host command sender (opcodes 0x01-0x27, 0x30-0x31, 0xFF — see Opcode enum)
   - Configuration panel for all radar parameters
   - HDF5 data recording for offline analysis
   - Mock mode for development/testing without hardware
@@ -241,27 +241,27 @@ class RadarDashboard:
         left = ttk.LabelFrame(outer, text="Quick Actions", padding=12)
         left.grid(row=0, column=0, sticky="nsew", padx=(0, 8))
 
-        ttk.Button(left, text="Trigger Chirp (0x01)",
-                   command=lambda: self._send_cmd(0x01, 1)).pack(fill="x", pady=3)
-        ttk.Button(left, text="Enable MTI (0x26)",
-                   command=lambda: self._send_cmd(0x26, 1)).pack(fill="x", pady=3)
-        ttk.Button(left, text="Disable MTI (0x26)",
-                   command=lambda: self._send_cmd(0x26, 0)).pack(fill="x", pady=3)
-        ttk.Button(left, text="Enable CFAR (0x25)",
-                   command=lambda: self._send_cmd(0x25, 1)).pack(fill="x", pady=3)
-        ttk.Button(left, text="Disable CFAR (0x25)",
-                   command=lambda: self._send_cmd(0x25, 0)).pack(fill="x", pady=3)
-        ttk.Button(left, text="Request Status (0xFF)",
-                   command=lambda: self._send_cmd(0xFF, 0)).pack(fill="x", pady=3)
+        ttk.Button(left, text=f"Trigger Chirp (0x{Opcode.TRIGGER:02X})",
+                   command=lambda: self._send_cmd(Opcode.TRIGGER, 1)).pack(fill="x", pady=3)
+        ttk.Button(left, text=f"Enable MTI (0x{Opcode.MTI_ENABLE:02X})",
+                   command=lambda: self._send_cmd(Opcode.MTI_ENABLE, 1)).pack(fill="x", pady=3)
+        ttk.Button(left, text=f"Disable MTI (0x{Opcode.MTI_ENABLE:02X})",
+                   command=lambda: self._send_cmd(Opcode.MTI_ENABLE, 0)).pack(fill="x", pady=3)
+        ttk.Button(left, text=f"Enable CFAR (0x{Opcode.CFAR_ENABLE:02X})",
+                   command=lambda: self._send_cmd(Opcode.CFAR_ENABLE, 1)).pack(fill="x", pady=3)
+        ttk.Button(left, text=f"Disable CFAR (0x{Opcode.CFAR_ENABLE:02X})",
+                   command=lambda: self._send_cmd(Opcode.CFAR_ENABLE, 0)).pack(fill="x", pady=3)
+        ttk.Button(left, text=f"Request Status (0x{Opcode.STATUS_REQUEST:02X})",
+                   command=lambda: self._send_cmd(Opcode.STATUS_REQUEST, 0)).pack(fill="x", pady=3)
 
         ttk.Separator(left, orient="horizontal").pack(fill="x", pady=6)
 
         ttk.Label(left, text="FPGA Self-Test", font=("Menlo", 10, "bold")).pack(
             anchor="w", pady=(2, 0))
-        ttk.Button(left, text="Run Self-Test (0x30)",
-                   command=lambda: self._send_cmd(0x30, 1)).pack(fill="x", pady=3)
-        ttk.Button(left, text="Read Self-Test Result (0x31)",
-                   command=lambda: self._send_cmd(0x31, 0)).pack(fill="x", pady=3)
+        ttk.Button(left, text=f"Run Self-Test (0x{Opcode.SELF_TEST_TRIGGER:02X})",
+                   command=lambda: self._send_cmd(Opcode.SELF_TEST_TRIGGER, 1)).pack(fill="x", pady=3)
+        ttk.Button(left, text=f"Read Self-Test Result (0x{Opcode.SELF_TEST_STATUS:02X})",
+                   command=lambda: self._send_cmd(Opcode.SELF_TEST_STATUS, 0)).pack(fill="x", pady=3)
 
         # Self-test result display
         st_frame = ttk.LabelFrame(left, text="Self-Test Results", padding=6)
@@ -286,16 +286,20 @@ class RadarDashboard:
         right.grid(row=0, column=1, sticky="nsew", padx=(8, 0))
 
         self._param_vars: Dict[str, tk.StringVar] = {}
+        # Opcode values come from the Opcode enum (single source of truth,
+        # matches radar_system_top.v command decoder).
         params = [
-            ("CFAR Guard (0x21)", 0x21, "2"),
-            ("CFAR Train (0x22)", 0x22, "8"),
-            ("CFAR Alpha Q4.4 (0x23)", 0x23, "48"),
-            ("CFAR Mode (0x24)", 0x24, "0"),
-            ("Threshold (0x10)", 0x10, "500"),
-            ("Gain Shift (0x06)", 0x06, "0"),
-            ("DC Notch Width (0x27)", 0x27, "0"),
-            ("Range Mode (0x20)", 0x20, "0"),
-            ("Stream Enable (0x05)", 0x05, "7"),
+            (f"CFAR Guard (0x{Opcode.CFAR_GUARD:02X})",         Opcode.CFAR_GUARD,     "2"),
+            (f"CFAR Train (0x{Opcode.CFAR_TRAIN:02X})",         Opcode.CFAR_TRAIN,     "8"),
+            (f"CFAR Alpha Q4.4 (0x{Opcode.CFAR_ALPHA:02X})",    Opcode.CFAR_ALPHA,     "48"),
+            (f"CFAR Mode (0x{Opcode.CFAR_MODE:02X})",           Opcode.CFAR_MODE,      "0"),
+            (f"Threshold (0x{Opcode.THRESHOLD:02X})",           Opcode.THRESHOLD,      "500"),
+            (f"Gain Shift (0x{Opcode.GAIN_SHIFT:02X})",         Opcode.GAIN_SHIFT,     "0"),
+            (f"DC Notch Width (0x{Opcode.DC_NOTCH_WIDTH:02X})", Opcode.DC_NOTCH_WIDTH, "0"),
+            (f"Range Mode (0x{Opcode.RANGE_MODE:02X})",         Opcode.RANGE_MODE,     "0"),
+            (f"Stream Enable (0x{Opcode.STREAM_ENABLE:02X})",   Opcode.STREAM_ENABLE,  "7"),
+            (f"Radar Mode (0x{Opcode.RADAR_MODE:02X})",         Opcode.RADAR_MODE,     "1"),
+            (f"Long Chirp (0x{Opcode.LONG_CHIRP:02X})",         Opcode.LONG_CHIRP,     "3000"),
         ]
 
         for row_idx, (label, opcode, default) in enumerate(params):
