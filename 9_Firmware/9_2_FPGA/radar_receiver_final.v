@@ -367,29 +367,50 @@ mti_canceller #(
 );
 
 // ========== FRAME SYNC USING chirp_counter ==========
+//
+// Goal: raise new_frame_pulse once every host_chirps_per_elev chirps,
+// regardless of the modulus of the upstream 6-bit chirp_counter.
+//
+// The previous implementation hard-coded three literal check points
+// (0, N, 2N) against chirp_counter. That only yields the right set
+// of frame boundaries when host_chirps_per_elev evenly divides the
+// 6-bit wrap (64), e.g. 16 or 32. For any other N the pulse was
+// missed (e.g. N=20 - expected boundaries at 0,20,40,60 but 60 was
+// silently dropped because {N,1'b0} is 2N and does not match the
+// third modulus crossing after the counter wraps). With
+// host_chirps_per_elev now runtime-configurable via opcode 0x15,
+// that became a real correctness bug for doppler frame sync.
+//
+// Fix: track chirp ticks with an explicit mod-N counter. Every time
+// chirp_counter changes (i.e. a new chirp arrives from the TX), bump
+// the mod counter; when it hits N-1 we have accumulated N chirps, so
+// reset the mod counter and pulse new_frame_pulse.
+//
+// host_chirps_per_elev is guaranteed non-zero by the decoder in
+// radar_system_top.v (opcode 0x15 clamps 0 -> DOPPLER_FRAME_CHIRPS).
 reg [5:0] chirp_counter_prev;
-reg new_frame_pulse;
+reg [5:0] chirp_mod_counter;
+reg       new_frame_pulse;
 
 always @(posedge clk or negedge reset_n) begin
     if (!reset_n) begin
         chirp_counter_prev <= 6'd0;
-        new_frame_pulse <= 1'b0;
+        chirp_mod_counter  <= 6'd0;
+        new_frame_pulse    <= 1'b0;
     end else begin
         // Default: no pulse
         new_frame_pulse <= 1'b0;
-        
-        // Dynamic frame detection using host_chirps_per_elev.
-        // Detect frame boundary when chirp_counter changes AND is a
-        // multiple of host_chirps_per_elev (0, N, 2N, 3N, ...).
-        // Uses a modulo counter that resets at host_chirps_per_elev.
+
         if (chirp_counter != chirp_counter_prev) begin
-            if (chirp_counter == 6'd0 ||
-                chirp_counter == host_chirps_per_elev ||
-                chirp_counter == {host_chirps_per_elev, 1'b0}) begin
-                new_frame_pulse <= 1'b1;
+            // New chirp detected on the TX counter input.
+            if (chirp_mod_counter >= host_chirps_per_elev - 6'd1) begin
+                chirp_mod_counter <= 6'd0;
+                new_frame_pulse   <= 1'b1;
+            end else begin
+                chirp_mod_counter <= chirp_mod_counter + 6'd1;
             end
         end
-        
+
         // Store previous value
         chirp_counter_prev <= chirp_counter;
     end
