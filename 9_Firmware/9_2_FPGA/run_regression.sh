@@ -4,9 +4,10 @@
 # Phase 0: Vivado-style lint (catches issues iverilog silently accepts)
 # Phase 1+: Compile and run all verified iverilog testbenches
 #
-# Usage:  ./run_regression.sh [--quick] [--skip-lint]
+# Usage:  ./run_regression.sh [--quick] [--skip-lint] [--lint-only]
 #   --quick      Skip long-running integration tests (receiver golden, system TB)
 #   --skip-lint  Skip Phase 0 lint checks (not recommended)
+#   --lint-only  Run Phase 0 lint only, then exit (used by CI for fast feedback)
 #
 # Exit code: 0 if all tests pass, 1 if any fail
 # ===========================================================================
@@ -18,12 +19,19 @@ cd "$SCRIPT_DIR"
 
 QUICK=0
 SKIP_LINT=0
+LINT_ONLY=0
 for arg in "$@"; do
     case "$arg" in
         --quick) QUICK=1 ;;
         --skip-lint) SKIP_LINT=1 ;;
+        --lint-only) LINT_ONLY=1 ;;
     esac
 done
+
+if [[ "$LINT_ONLY" -eq 1 && "$SKIP_LINT" -eq 1 ]]; then
+    echo "Error: --lint-only and --skip-lint are mutually exclusive." >&2
+    exit 2
+fi
 
 PASS=0
 FAIL=0
@@ -348,6 +356,24 @@ if [[ "$SKIP_LINT" -eq 0 ]]; then
 else
     echo "--- PHASE 0: LINT (skipped via --skip-lint) ---"
     echo ""
+fi
+
+# Early exit for lint-only mode (used by CI for fast regressions feedback)
+if [[ "$LINT_ONLY" -eq 1 ]]; then
+    echo "============================================"
+    echo "  RESULTS (--lint-only)"
+    echo "============================================"
+    if [[ "$LINT_ERR" -gt 0 ]]; then
+        echo -e "  Lint:  ${RED}$LINT_ERR error(s)${NC}, $LINT_WARN warning(s)"
+        echo "============================================"
+        exit 1
+    elif [[ "$LINT_WARN" -gt 0 ]]; then
+        echo -e "  Lint:  ${GREEN}0 errors${NC}, ${YELLOW}$LINT_WARN warning(s) (non-blocking)${NC}"
+    else
+        echo -e "  Lint:  ${GREEN}clean${NC}"
+    fi
+    echo "============================================"
+    exit 0
 fi
 
 # ===========================================================================

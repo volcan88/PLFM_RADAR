@@ -1,0 +1,50 @@
+# Pre-commit hooks for PLFM_RADAR.
+#
+# Install once per checkout:   pip install pre-commit && pre-commit install
+# Run on demand:                pre-commit run --all-files
+#
+# CI runs the same hooks in .github/workflows/ci.yml (pre-commit job), so
+# skipping the local install is not a way to sneak a violation in.
+
+repos:
+  - repo: https://github.com/pre-commit/pre-commit-hooks
+    rev: v4.6.0
+    hooks:
+      - id: trailing-whitespace
+        # The active Python GUI + Verilog RTL live in firmware dirs; don't
+        # touch vendor C libraries or archived GUIs.
+        exclude: |
+          (?x)^(
+              9_Firmware/9_1_Microcontroller/9_1_1_C_Cpp_Libraries/.*|
+              9_Firmware/9_3_GUI/archive/.*|
+              7_Components\ Datasheets/.*
+          )$
+      - id: end-of-file-fixer
+        exclude: |
+          (?x)^(
+              9_Firmware/9_1_Microcontroller/9_1_1_C_Cpp_Libraries/.*|
+              9_Firmware/9_3_GUI/archive/.*|
+              7_Components\ Datasheets/.*|
+              .*\.gif|.*\.png|.*\.jpg|.*\.pdf|.*\.mem|.*\.coe
+          )$
+      - id: check-yaml
+      - id: check-added-large-files
+        args: ['--maxkb=2048']
+      - id: check-merge-conflict
+      # NOTE: `mixed-line-ending` is intentionally not enabled here.
+      # Several firmware files (main.cpp, radar_system_top.v, latency_buffer.v
+      # ...) were committed with mixed CRLF+LF endings from CubeIDE/Vivado
+      # edits long before this CI pass. Rewriting them would pollute a
+      # cleanup PR with a huge unrelated diff and is deferred.
+
+  - repo: https://github.com/astral-sh/ruff-pre-commit
+    rev: v0.6.9
+    hooks:
+      - id: ruff
+        args: [--fix]
+        # pre-commit passes changed files as explicit arguments, which
+        # bypasses ruff's own `include` discovery — scope the hook to the
+        # actively-maintained GUI surface here to match pyproject.toml.
+        # Expand once the other Python trees are cleaned (see the note in
+        # pyproject.toml).
+        files: ^9_Firmware/9_3_GUI/(?!archive/).*\.py$

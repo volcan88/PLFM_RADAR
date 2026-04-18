@@ -21,7 +21,6 @@ Usage:
   python radar_dashboard.py --record     # Launch with HDF5 recording
 """
 
-import sys
 import os
 import time
 import queue

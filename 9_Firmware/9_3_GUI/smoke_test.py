@@ -27,7 +27,6 @@ Exit codes:
 import sys
 import os
 import time
-import struct
 import argparse
 import logging
 
